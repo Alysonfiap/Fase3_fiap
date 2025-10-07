@@ -1,0 +1,245 @@
+"""
+=========================================
+API DE DOENÇA CARDÍACA 🫀
+=========================================
+
+Autor: Alyson Alves
+Descrição:
+------------
+Aplicação desenvolvida com FastAPI para prever a probabilidade de uma pessoa
+ter doença cardíaca, com base em idade, colesterol e tipo de dor no peito (cp).
+
+O modelo foi treinado usando TensorFlow e dados do repositório UCI Machine Learning.
+Os resultados são armazenados em um banco de dados SQLite e exibidos via interface HTML.
+
+Recursos:
+---------
+✅ Interface web (HTML + Jinja2)
+✅ Banco de dados SQLite para histórico de pacientes
+✅ Modelo simples de aprendizado de máquina em TensorFlow
+✅ API REST com rota de listagem de pacientes
+✅ Inserção automática de dados fictícios (300 pacientes)
+
+Requisitos:
+-----------
+pip install fastapi uvicorn tensorflow pandas scikit-learn ucimlrepo jinja2
+
+Execução:
+---------
+uvicorn main:app --reload
+
+Estrutura esperada:
+-------------------
+📂 projeto/
+ ┣ 📂 templates/
+ ┃ ┗ 📄 index.html
+ ┣ 📄 main.py
+ ┗ 📄 data.db (gerado automaticamente)
+"""
+
+# ==========================================================
+# Importações
+# ==========================================================
+import random
+from pathlib import Path as SysPath
+from typing import List, Dict
+
+import sqlite3
+import pandas as pd
+import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
+from ucimlrepo import fetch_ucirepo
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
+
+# ==========================================================
+# Configurações iniciais
+# ==========================================================
+app = FastAPI(
+    title="API de Doença Cardíaca",
+    version="1.0.0",
+    description="Predição de risco cardíaco usando TensorFlow e dados da UCI."
+)
+
+templates = Jinja2Templates(directory="templates")
+DB_PATH = SysPath("data.db")
+
+
+# ==========================================================
+# BANCO DE DADOS
+# ==========================================================
+def get_connection():
+    """
+    Cria e retorna uma conexão com o banco SQLite.
+    """
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """
+    Inicializa o banco de dados:
+    - Cria a tabela 'pacientes' se não existir.
+    - Insere 300 registros fictícios caso o banco esteja vazio.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Criação da tabela
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pacientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT,
+            idade REAL,
+            colesterol REAL,
+            cp INTEGER,
+            probabilidade_doenca REAL
+        )
+    """)
+    conn.commit()
+
+    # Populando com dados fictícios
+    cur.execute("SELECT COUNT(*) FROM pacientes")
+    count = cur.fetchone()[0]
+
+    if count < 300:
+        nomes = [f"Paciente_{i+1}" for i in range(300)]
+        for nome in nomes:
+            idade = random.randint(30, 80)
+            colesterol = random.randint(150, 300)
+            cp = random.randint(0, 3)
+            probabilidade = round(random.uniform(0, 100), 2)
+            cur.execute(
+                """
+                INSERT INTO pacientes (nome, idade, colesterol, cp, probabilidade_doenca)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (nome, idade, colesterol, cp, probabilidade)
+            )
+        conn.commit()
+    conn.close()
+
+
+# Inicializa o banco ao iniciar o app
+init_db()
+
+
+# ==========================================================
+# TREINAMENTO DO MODELO
+# ==========================================================
+# Carrega dataset da UCI
+doenca_cardiaca = fetch_ucirepo(id=45)
+X = doenca_cardiaca.data.features[['age', 'chol', 'cp']]
+y = (doenca_cardiaca.data.targets > 0) * 1  # Binário: 0 (sem doença), 1 (com doença)
+
+# One-hot encoding para coluna 'cp' (tipo de dor no peito)
+df_cp = pd.get_dummies(X['cp'], prefix='cp')
+X = X.drop('cp', axis=1).join(df_cp)
+
+# Normalização das features numéricas
+scaler = StandardScaler()
+X[['age', 'chol']] = scaler.fit_transform(X[['age', 'chol']])
+
+# Criação de um modelo simples de neurônio único
+tf.random.set_seed(31)
+quantidade_features = X.shape[1]
+pesos = tf.Variable(tf.random.normal([quantidade_features, 1]), name='pesos')
+vies = tf.Variable(tf.random.normal([1]), name='vies')
+
+
+def neuronio(x):
+    """Implementa o cálculo de um neurônio: y = xW + b"""
+    return tf.add(tf.matmul(x, pesos), vies)
+
+
+# TensorFlow - Treinamento manual
+entrada = tf.constant(X, dtype=tf.float32)
+y_tensor = tf.constant(y, dtype=tf.float32)
+otimizador = tf.optimizers.SGD(learning_rate=0.01)
+loss_fn = tf.keras.losses.BinaryCrossentropy()
+
+EPOCHS = 1000
+for epoca in range(EPOCHS):
+    with tf.GradientTape() as tape:
+        pred = tf.sigmoid(neuronio(entrada))
+        loss = loss_fn(y_tensor, pred)
+    gradientes = tape.gradient(loss, [pesos, vies])
+    otimizador.apply_gradients(zip(gradientes, [pesos, vies]))
+
+
+def prever_doenca(idade: float, colesterol: float, cp: int) -> float:
+    """
+    Realiza a previsão da probabilidade de doença cardíaca.
+    Retorna a probabilidade em porcentagem.
+    """
+    colunas_cp = [col for col in X.columns if col.startswith('cp_')]
+    cp_dict = {col: 0 for col in colunas_cp}
+    cp_dict[f'cp_{cp}'] = 1
+
+    df = pd.DataFrame([[idade, colesterol]], columns=['age', 'chol'])
+    df[['age', 'chol']] = scaler.transform(df[['age', 'chol']])
+    df = df.join(pd.DataFrame([cp_dict]))
+    df = df[X.columns]
+
+    tensor = tf.constant(df.values, dtype=tf.float32)
+    prob = tf.sigmoid(neuronio(tensor)).numpy()[0][0]
+    return round(prob * 100, 2)
+
+
+# ==========================================================
+# INTERFACE HTML
+# ==========================================================
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    """
+    Exibe a página inicial com o formulário.
+    """
+    return templates.TemplateResponse("index.html", {"request": request, "resultado": None})
+
+
+@app.post("/", response_class=HTMLResponse)
+def process_form(
+    request: Request,
+    nome: str = Form(...),
+    idade: float = Form(...),
+    colesterol: float = Form(...),
+    cp: int = Form(...)
+):
+    """
+    Recebe os dados do formulário, faz a previsão e grava no banco.
+    """
+    probabilidade = prever_doenca(idade, colesterol, cp)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO pacientes (nome, idade, colesterol, cp, probabilidade_doenca) VALUES (?, ?, ?, ?, ?)",
+        (nome, idade, colesterol, cp, probabilidade)
+    )
+    conn.commit()
+    conn.close()
+
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "resultado": f"{nome}: {probabilidade:.2f}% de chance de doença cardíaca"}
+    )
+
+
+# ==========================================================
+# API - ENDPOINTS JSON
+# ==========================================================
+@app.get("/pacientes", summary="Lista todos os pacientes cadastrados")
+def listar_pacientes() -> Dict[str, List[Dict]]:
+    """
+    Retorna todos os pacientes cadastrados no banco de dados.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM pacientes")
+    registros = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return {"pacientes": registros}
