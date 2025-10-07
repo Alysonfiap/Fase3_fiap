@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Previsão de Doença Cardíaca</title>
+</head>
+<body>
+    <h1>Previsão de Doença Cardíaca</h1>
+    <form method="POST">
+        <label for="nome">Nome:</label><br>
+        <input type="text" id="nome" name="nome" required><br><br>
+
+        <label for="idade">Idade:</label><br>
+        <input type="number" id="idade" name="idade" step="any" required><br><br>
+
+        <label for="colesterol">Colesterol:</label><br>
+        <input type="number" id="colesterol" name="colesterol" step="any" required><br><br>
+
+        <label for="cp">Tipo de dor no peito:</label><br>
+        <select id="cp" name="cp" required>
+            <option value="0">0 - Típica angina</option>
+            <option value="1">1 - Angina atípica</option>
+            <option value="2">2 - Dor não anginosa</option>
+            <option value="3">3 - Assintomática</option>
+        </select><br><br>
+
+        <button type="submit">Enviar</button>
+    </form>
+
+    {% if resultado %}
+        <h2>Resultado:</h2>
+        <p>{{ resultado }}</p>
+    {% endif %}
+</body>
+</html>
